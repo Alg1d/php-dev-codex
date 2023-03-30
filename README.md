@@ -25,6 +25,7 @@
     * [String concatenation](#string-concatenation)
     * [Method visibility](#method-visibility)
     * [Small and understandable methods](#small-and-understandable-methods)
+    * [Subtyping exceptions](#subtyping-exceptions)
     * [Dates](#dates)
     * [Redundant PhpDoc](#redundant-phpdoc)
     * [PhpDoc on arrays](#phpdoc-on-arrays)
@@ -41,8 +42,8 @@
     * [Event subscriber naming](#event-subscriber-naming)
     * [Route path naming](#route-path-naming)
 - [ADRs](#adrs)
-    * [Model without defaults](#adr-1-model-without-defaults)
-    * [Model without logic](#adr-2-model-without-logic)
+    * [Model without defaults](#model-without-defaults)
+    * [Model without logic](#model-without-logic)
 - [Git](#git)
     * [Branch naming](#branch-naming)
     * [Meaningful commits](#meaningful-commits)
@@ -405,6 +406,57 @@ Use `public` visibility only when method is called from outside of class.
 Try (hard) to write code that is self-explanatory. This implies writing small methods by looking at which you can
 understand what the method does. Also try to name methods by their meaning, which also helps to understand the code.
 
+### Subtyping exceptions
+
+You should never throw the `Exception` class directly. Instead, you must create custom exception extended from the SPL
+library exception.
+
+<table>
+    <thead>
+        <tr>
+            <th>:x: Wrong</th>
+            <th>:white_check_mark: Right</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td>
+
+```php
+public function checkToken(string $token): string
+{
+    if ($token === 'not valid token') {
+        throw new Exception('Invalid token.');
+    }
+
+    return $token;
+}
+```
+
+</td>
+<td>
+
+```php
+public function checkToken(string $token): string
+{
+    if ($token === 'not valid token') {
+        throw new InvalidTokenException('Invalid token.');
+    }
+
+    return $token;
+}
+```
+
+</td>
+        </tr>
+    </tbody>
+</table>
+
+Custom exception does not need to contain any code. It just needs to extend the SPL exception class.
+
+> **Why?** This greatly simplifies debugging and troubleshooting because you can easily determine the type of error
+> that occurred. Additionally, creating custom exception classes also helps keep code organised and maintainable.
+
 ### Dates
 
 Instead of manually applying defensive techniques in order to prevent unexpected mutation when passing around
@@ -666,20 +718,34 @@ Example: `ResetPasswordSubscriber`.
 It stands for **Architectural Decision Record**, but in this case it's just **Any Decision Record** to make it simple.
 It's the rules you decide to apply to your project.
 
-Status can be: `proposed`, `rejected`, `accepted`, `deprecated`, `superseded`.
+### Model without defaults
 
-### ADR 1 Model without defaults
+Model[^1] properties mustn't contain default values. Service must handle the model properties.
 
-![](https://img.shields.io/badge/status-accepted-success)
+<table>
+    <thead>
+        <tr>
+            <th>:x: Wrong</th>
+            <th>:white_check_mark: Right</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td>
 
-#### Context
+```php
+class UserUpdateModel
+{
+    public string $name;
 
-Use Models (aka DTOs) for moving data, that enters the application, around functionality.
-Model mustn't contain default values. Services should decide what to do with properties.
+    public bool $active = true;
 
-#### Decision
+    public ?UploadedFile $image = null;
+}
+```
 
-Create models with properties without default values. Example:
+</td>
+<td>
 
 ```php
 class UserUpdateModel
@@ -692,12 +758,83 @@ class UserUpdateModel
 }
 ```
 
-### ADR 2 Model without logic
+</td>
+        </tr>
+    </tbody>
+</table>
 
-![](https://img.shields.io/badge/status-accepted-success)
+**Background**
 
-Don't put any logic into models - all logic is handled in services.
-This allows to change and configure behaviour in different context.
+For example, we have a service that updates a user, which depends on the data in the model that it receives.
+Let's consider two cases that lead to problems.
+
+**In the first case**, the application will have several sources for updating the user: the endpoint, the admin panel,
+and the console command. When updating a user through the admin panel, there are no problems, because the model
+receives all the data that the user entity already had. But a console command that updates one particular field will
+overwrite other fields with default values. Exactly the same situation for the endpoint, the client application may
+simply not pass some field that will be overwritten by the default value.
+
+**In the second case**, the developer who needed to make an optional field simply made it nullable and assigned `null`
+by default. In the service, he added an `isset` check that will never set the value to `null`. But how can a user who
+wants to remove an avatar do it now? Some developers add a separate endpoint for such purposes, which is fundamentally
+wrong. The correct solution in this case would be to check if this property is initialised in the model. We can
+conditionally divide the `$image` property into 3 states:
+
+1. Not initialised - service mustn't do anything
+2. Initialised with `null` value - service must assign `null` and delete the image
+3. Initialised with a new value - service must assign a new value and delete the old image
+
+### Model without logic
+
+Model[^1] mustn't contain any logic. All logic is handled in services.
+
+<table>
+    <thead>
+        <tr>
+            <th>:x: Wrong</th>
+            <th>:white_check_mark: Right</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td>
+
+```php
+class RenderQueueModel
+{
+    public string $format;
+
+    public string $videoCodec;
+
+    public string $audioCodec;
+    
+    public static function createFromTemplate(Template $template): self
+    {
+        // ...
+    }
+}
+```
+
+</td>
+<td>
+
+```php
+class RenderQueueModel
+{
+    public string $format;
+
+    public string $videoCodec;
+
+    public string $audioCodec;
+}
+```
+
+</td>
+        </tr>
+    </tbody>
+</table>
+
+> **Why?** This allows to change and configure behaviour in different context.
 
 ---
 
@@ -769,3 +906,5 @@ Use the squash option to merge a PR when there is more than one commit. Delete b
 
 > **Why?** This significantly reduces the number of commits in the target branch, which in turn allows you to move
 > through the history of the branch faster.
+
+[^1]:_Model_ - aka DTO, used for moving data, that enters the application, around functionality.
