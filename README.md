@@ -18,6 +18,7 @@
     * [Comparing to boolean](#comparing-to-boolean)
     * [Checking things explicitly](#checking-things-explicitly)
     * [Match expression](#match-expression)
+    * [Trailing comma](#trailing-comma)
     * [Assignments in conditions](#assignments-in-conditions)
     * [Unnecessary variables](#unnecessary-variables)
     * [Unnecessary structures](#unnecessary-structures)
@@ -44,6 +45,9 @@
 - [ADRs](#adrs)
     * [Model without defaults](#model-without-defaults)
     * [Model without logic](#model-without-logic)
+    * [Fetch-only repository](#fetch-only-repository)
+    * [Composite service](#composite-service)
+    * [Service interaction](#service-interaction)
 - [Git](#git)
     * [Branch naming](#branch-naming)
     * [Meaningful commits](#meaningful-commits)
@@ -181,6 +185,59 @@ $message = match ($statusCode) {
 </table>
 
 > **Why?** For strict type checks and to avoid huge obscure and hard to read structures.
+
+### Trailing comma
+
+Always add a trailing comma in multiline arrays, objects, functions, etc.
+
+<table>
+    <thead>
+        <tr>
+            <th>:x: Wrong</th>
+            <th>:white_check_mark: Right</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td>
+
+```php
+public function create(
+    ProductCreateModel $model,
+    User $user
+): Product {
+    $data = [
+        'name' => $modle->name,
+        'type' => $modle->type
+    ];
+
+    // ...
+}
+```
+
+</td>
+<td>
+
+```php
+public function create(
+    ProductCreateModel $model,
+    User $user,
+): Product {
+    $data = [
+        'name' => $modle->name,
+        'type' => $modle->type,
+    ];
+
+    // ...
+}
+```
+
+</td>
+        </tr>
+    </tbody>
+</table>
+
+> **Why?** This leads to cleaner git diffs and simplify adding and removing items.
 
 ### Assignments in conditions
 
@@ -718,6 +775,11 @@ Example: `ResetPasswordSubscriber`.
 It stands for **Architectural Decision Record**, but in this case it's just **Any Decision Record** to make it simple.
 It's the rules you decide to apply to your project.
 
+I work on projects based on Service-Oriented Architecture (SOA), so ADRs are directly related to it.
+Services are responsible for the business logic of one specific entity or discrete unit of functionality.
+For example, `UserService` is responsible for all the logic related to the user entity, while `SecurityService` is
+responsible for all the logic related to the authentication functionality.
+
 ### Model without defaults
 
 Model[^1] properties mustn't contain default values. Service must handle the model properties.
@@ -836,6 +898,161 @@ class RenderQueueModel
 
 > **Why?** This allows to change and configure behaviour in different context.
 
+### Fetch-only repository
+
+Use the repository class only for fetching objets from the database. The repository mustn't manage entities and
+mustn't contain business logic, this is the responsibility of services.
+
+> **Why?** Any logic not related to fetching objects violates the Single Responsibility Principle and Service-Oriented
+> Architecture.
+
+### Composite service
+
+Don't concentrate all business logic in one service. Create multiple services to perform specific tasks and combine
+them into one composite service. For example, the composite `UserService` would be composed of the specific
+`UserManager` and `UserSynchronizer` services.
+
+<table>
+    <thead>
+        <tr>
+            <th>:x: Wrong</th>
+            <th>:white_check_mark: Right</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td>
+
+```php
+class UserService
+{
+    public function __construct(
+        private readonly EntityManagerInterface $entityManager,
+    ) {
+    }
+
+    public function create(UserCreateModel $model): User
+    {
+        $user = new User();
+        $user->name = $model->name;
+        // ...
+    }
+
+    public function synchronize(User $user): void
+    {
+        $products = $user->getProducts();
+        // ...
+    }
+}
+```
+
+</td>
+<td>
+
+```php
+class UserService
+{
+    public function __construct(
+        private readonly UserManager $userManager,
+        private readonly UserSynchronizer $userSynchronizer,
+    ) {
+    }
+
+    public function create(UserCreateModel $model): User
+    {
+        return $this->userManager->create($model);
+    }
+
+    public function synchronize(User $user): void
+    {
+        $this->userSynchronizer->synchronize($user);
+    }
+}
+```
+
+</td>
+        </tr>
+    </tbody>
+</table>
+
+**Background**
+
+All business logic in one service is a bad idea. Such a service would contain a huge amount of code and would be
+difficult to maintain. It also violates the Single Responsibility Principle.
+
+But using a huge number of specific services in controllers, normalizers, event subscribers, etc. is also not
+convenient. The classes will have a lot of dependencies, and it will be hard to keep track of the usage of the
+business logic.
+
+Creating a composite service that will contain several specific services solves these problems. Such a service simply
+delegates tasks to specific services and serves as an interface for interacting with other classes.
+
+### Service interaction
+
+Services responsible for the business logic of different entities must interact with each other through the event
+system. The service responsible for the business logic of the user mustn't contain the service responsible for the
+authorization logic and vice versa. Otherwise, you will get one interconnected service instead of two independent ones.
+
+<table>
+    <thead>
+        <tr>
+            <th>:x: Wrong</th>
+            <th>:white_check_mark: Right</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td>
+
+```php
+class UserManager
+{
+    public function __construct(
+        private readonly SecurityService $securityService,
+    ) {
+    }
+
+    public function create(UserCreateModel $model): User
+    {
+        // ...
+
+        $this->securityService->generateResetToken($user);
+
+        return $user;
+    }
+}
+```
+
+</td>
+<td>
+
+```php
+class UserManager
+{
+    public function __construct(
+        private readonly EventDispatcherInterface $eventDispatcher,
+    ) {
+    }
+
+    public function create(UserCreateModel $model): User
+    {
+        // ...
+
+        $event = new UserCreatedEvent($user);
+        $this->eventDispatcher->dispatch($event, UserCreatedEvent::NAME);
+
+        return $user;
+    }
+}
+```
+
+</td>
+        </tr>
+    </tbody>
+</table>
+
+> **Why?** To avoid circular dependency and to keep services loosely coupled.
+
 ---
 
 ## Git
@@ -863,9 +1080,11 @@ jira-123-add-product-access-assignment-for-user-in-admin
 When committing your code, it's helpful to write useful commit messages.
 
 1. Start each message with issue ID
-2. Use imperative commands such as: `add`, `remove`, `fix`, `refactor`, etc.
-3. Keep it brief. Message mustn't exceed 50 characters (excluding ID)
-4. Make small, specific commits
+2. Capitalise subject
+3. Use imperative commands such as: `add`, `remove`, `fix`, `refactor`, etc.
+4. Keep it brief. Message mustn't exceed 50 characters (excluding ID)
+5. Make small, specific commits
+6. Don't put a dot at the end
 
 Your commit message should be able to end the phrase "If applied, this code will...".
 
@@ -883,6 +1102,7 @@ Your commit message should be able to end the phrase "If applied, this code will
 2. Replace long and obscure names with short and descriptive summary
 3. Must be capitalized and written in imperative present tense
 4. Always use `WIP:` prefix if PR is not ready
+5. Don't put a dot at the end
 
 For example, there is an issue "JIRA-321 add new API endpoint: GET /product/{productId}/status".
 
