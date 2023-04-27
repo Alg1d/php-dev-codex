@@ -509,7 +509,8 @@ public function checkToken(string $token): string
     </tbody>
 </table>
 
-Custom exception does not need to contain any code. It just needs to extend the SPL exception class.
+Custom exception does not need to contain any code. It just needs to extend the SPL exception class. For common cases
+(e.g. wrong type of variable in validator) you can just use an exception from the SPL library.
 
 > **Why?** This greatly simplifies debugging and troubleshooting because you can easily determine the type of error
 > that occurred. Additionally, creating custom exception classes also helps keep code organised and maintainable.
